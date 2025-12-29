@@ -8,9 +8,9 @@
     "dev": "vite-node --watch server/index.ts",
     "dev:frontend": "vite",
     "start": "node dist/server/index.js",
-    "build": "tsc -b && vite build && vite build --mode server",
-    "build:frontend": "tsc -b && vite build",
-    "build:server": "vite build --mode server",
+    "build": "tsc -b && npx vite build && npx vite build --mode server",
+    "build:frontend": "tsc -b && npx vite build",
+    "build:server": "npx vite build --mode server",
     "lint": "eslint .",
     "preview": "vite preview",
     "preview:server": "node dist/server/index.js"
