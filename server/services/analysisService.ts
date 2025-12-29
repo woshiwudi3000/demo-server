@@ -19,12 +19,21 @@ export const analysisTasks: Record<string, AnalysisTask> = {};
 // SSE Manager
 class SSEManager {
   private clients: Map<string, Response> = new Map();
+  // 短轮询模式下的消息队列（clientId -> message[]）
+  private messageQueues: Map<string, Array<{ eventType: string; data: unknown }>> = new Map();
 
   /**
-   * Add SSE client
+   * Add SSE client (for long connection) or initialize message queue (for short polling)
    */
-  addClient(clientId: string, response: Response): void {
-    this.clients.set(clientId, response);
+  addClient(clientId: string, response?: Response): void {
+    // 如果有 response，添加到长连接列表
+    if (response) {
+      this.clients.set(clientId, response);
+    }
+    // 初始化消息队列（用于短轮询模式）
+    if (!this.messageQueues.has(clientId)) {
+      this.messageQueues.set(clientId, []);
+    }
     // 日志已在 sseController 中输出，这里不再重复
   }
 
@@ -47,6 +56,10 @@ class SSEManager {
         }
       }
       this.clients.delete(clientId);
+      // 清理消息队列（延迟清理，给短轮询一些时间获取消息）
+      setTimeout(() => {
+        this.messageQueues.delete(clientId);
+      }, 60000); // 60秒后清理队列
       // 日志已在 sseController 中输出，这里不再重复
     }
   }
@@ -56,11 +69,21 @@ class SSEManager {
    */
   sendToClient(clientId: string, eventType: string, data: unknown): boolean {
     const response = this.clients.get(clientId);
+    
+    // 如果客户端不在长连接列表中，将消息加入队列（短轮询模式）
     if (!response) {
-      console.warn(`Client ${clientId} not found`);
-      return false;
+      const queue = this.messageQueues.get(clientId);
+      if (queue) {
+        // 消息加入队列，等待下次轮询时返回
+        queue.push({ eventType, data });
+        return true;
+      } else {
+        console.warn(`Client ${clientId} not found and no message queue`);
+        return false;
+      }
     }
 
+    // 长连接模式：直接发送
     try {
       const message = {
         event: eventType,
@@ -70,6 +93,17 @@ class SSEManager {
 
       response.write(`event: ${eventType}\n`);
       response.write(`data: ${JSON.stringify(message)}\n\n`);
+      
+      // 同时将消息加入队列（用于短轮询模式的备份）
+      const queue = this.messageQueues.get(clientId);
+      if (queue) {
+        queue.push({ eventType, data });
+        // 限制队列大小，避免内存泄漏
+        if (queue.length > 1000) {
+          queue.shift(); // 移除最旧的消息
+        }
+      }
+      
       return true;
     } catch (error) {
       // 区分正常断开和异常错误
@@ -83,6 +117,21 @@ class SSEManager {
       }
       return false;
     }
+  }
+
+  /**
+   * Get and clear pending messages for a client (for short polling)
+   */
+  getPendingMessages(clientId: string): Array<{ eventType: string; data: unknown }> {
+    const queue = this.messageQueues.get(clientId);
+    if (!queue || queue.length === 0) {
+      return [];
+    }
+    
+    // 返回所有待处理消息并清空队列
+    const messages = [...queue];
+    queue.length = 0; // 清空队列
+    return messages;
   }
 
   /**
